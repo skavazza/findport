@@ -1,59 +1,56 @@
 # 🛡️ FindPort - Gerenciador Interativo de Portas e Firewall (Windows)
 
-Script PowerShell interativo que lista e numera as portas abertas no seu Windows, identifica o processo responsável (PID, nome e caminho) e permite que você decida:
-1. **Encerrar o processo** (matar o aplicativo e liberar a porta).
-2. **Bloquear a porta no Firewall** (bloqueia o tráfego externo/rede **sem fechar o aplicativo**).
-3. **Desbloquear portas**: Ao rodar o script novamente, ele detecta e lista no topo todas as portas que você bloqueou, permitindo desbloqueá-las a qualquer momento.
+Uma ferramenta completa de auditoria, segurança e controle de portas de rede para **Windows**. Lista portas abertas (**TCP e UDP**), analisa o nível de exposição na rede, reconhece serviços conhecidos e permite decidir entre **finalizar o processo** ou **bloquear a porta no Firewall sem fechar o aplicativo**, mantendo histórico reversível para desbloqueio a qualquer momento.
 
 ---
 
-## 🚀 Como Executar
+## ⚡ Como Executar em 1 Clique
 
-Abra o **PowerShell** (preferencialmente como **Administrador** para poder aplicar regras de Firewall) na pasta do projeto:
+Basta dar **duplo clique** no arquivo:
+```cmd
+run.bat
+```
+> O arquivo solicita automaticamente permissão de **Administrador (UAC)** do Windows e abre o terminal pronto para uso com acesso total ao Firewall e processos.
+
+---
+
+## 🚀 Como Executar pelo Terminal
+
+Se preferir rodar manualmente no **PowerShell**:
 
 ```powershell
 .\find_ports.ps1
 ```
 
-> **Nota:** Se você abrir em um PowerShell comum (não-administrador), o script avisa no topo e disponibiliza a opção **`[A]`** para reabrir como Administrador com apenas uma tecla.
+Opções via linha de comando:
+```powershell
+.\find_ports.ps1 -ApenasSeguras    # Inicia filtrando apenas portas que podem ser fechadas
+```
 
 ---
 
-## 🖥️ Como Funciona o Menu Interativo
+## 🌟 Principais Recursos
 
-### 1. Painel Inicial
-Ao iniciar, o script exibe:
-- **Painel de Portas Bloqueadas** (se houver regras criadas pelo FindPort):
-  ```text
-  🛡️ PORTAS ATUALMENTE BLOQUEADAS POR VOCE NO FIREWALL:
-     [B1] Porta 8080 (TCP) - Regra: FindPort: Bloqueio Porta 8080 (TCP)
-  ```
-- **Tabela Numerada com Portas Abertas:**
-  ```text
-  #     | PORTA  | PROTO | PID     | PROCESSO             | PODE FECHAR?   | FIREWALL     | CATEGORIA         
-  -----------------------------------------------------------------------------------------------
-  [1]   | 5037   | TCP   | 20796   | adb                  | SIM            | Livre        | Aplicativo de Usu...
-  [2]   | 7070   | TCP   | 3836    | AnyDesk              | SIM            | Livre        | Aplicativo de Usu...
-  [3]   | 8086   | TCP   | 19776   | node                 | SIM            | Livre        | Dev / Servidor Lo...
-  [4]   | 135    | TCP   | 1320    | svchost              | NUNCA          | Livre        | Sistema Critico   
-  ```
-
-### 2. Ações Disponíveis
-Basta digitar:
-- **`[Número da Porta]`** (ex: `3`): Abre as opções para aquela porta:
-  - **`[1]` Encerrar o processo**: Finaliza o processo via `Stop-Process -Force` (com proteção contra encerramento acidental de processos críticos do Windows como `System`, `svchost`, `lsass`).
-  - **`[2]` Bloquear a porta no Firewall (SEM fechar o app)**: Cria uma regra de bloqueio de entrada no Firewall do Windows. O app continua aberto, mas não recebe mais conexões.
-  - **`[0]` Voltar ao menu principal**.
-- **`[D]`**: Menu de **Desbloqueio** — lista todas as regras de bloqueio criadas e permite desbloquear uma porta específica ou todas de uma vez (`T`).
-- **`[F]`**: Alterna o filtro entre **Mostrar todas as portas** e **Mostrar apenas seguras para fechar**.
-- **`[R]`**: Atualiza e recarrega a lista de portas em tempo real.
-- **`[A]`**: Reinicia o script com permissões de Administrador (se estiver em modo comum).
-- **`[S]` ou `[Q]`**: Sair do script.
+1. **⚡ Executável em 1 clique (`run.bat`)**: Não precisa abrir o PowerShell e digitar comandos como administrador manualmente.
+2. **🌐 Detecção de Exposição de Rede**:
+   - 🏠 **Local (PC)** (`127.0.0.1` / `::1`): Baixo risco, acessível apenas localmente.
+   - ⚠️ **Rede / Aberta** (`0.0.0.0` / `*`): Exposta para outros aparelhos na sua rede local/Wi-Fi.
+3. **📡 Suporte Completo a TCP e UDP**: Audita tanto servidores TCP (`Listen`) quanto endpoints UDP (jogos, streaming, DNS, VoIP).
+4. **🏷️ Dicionário Inteligente de Portas**:
+   - Identifica automaticamente portas famosas: `3306` (MySQL), `5432` (PostgreSQL), `6379` (Redis), `3000`/`5173`/`8080` (Web Dev), `5037` (Android ADB), `7070` (AnyDesk), `3389` (RDP), etc.
+5. **🔍 Busca e Filtro em Tempo Real**:
+   - Digite **`[B]`** para pesquisar por termo (ex: filtrar por `node`, `mysql`, `8080` ou `anydesk`).
+   - Digite **`[C]`** para limpar a busca.
+6. **🔒 Bloquear no Firewall vs Encerrar Processo**:
+   - **`[1]` Encerrar Processo**: Libera a porta matando o aplicativo (com trava de segurança em processos vitais do Windows como `System`, `svchost`, `lsass`).
+   - **`[2]` Bloquear no Firewall**: Mantém o aplicativo aberto e funcionando, mas impede qualquer conexão externa na porta.
+7. **🔄 Desbloqueio e Memória de Regras**:
+   - Ao abrir o FindPort, ele verifica se existem portas bloqueadas anteriormente por você e permite restaurá-las a qualquer momento teclando **`[D]`**.
+8. **📝 Histórico de Auditoria (`findport_audit.log`)**:
+   - Todas as ações de encerramento de processos, bloqueios e desbloqueios são registradas com data, hora, porta, protocolo e processo.
 
 ---
 
-## 🔒 Segurança e Categorias
+## 📖 Arquitetura e Especificação para IAs
 
-- 🟢 **SIM (Pode fechar)**: Servidores locais (Node, Python, Java, MySQL) ou apps de usuário (AnyDesk, Discord, Steam, etc.).
-- 🔴 **NUNCA (Crítico)**: Processos vitais do Windows (`System`, `svchost`, `lsass`, `wininit`, etc.). O script impede o encerramento acidental.
-- 🟡 **CUIDADO**: Serviços de rede ou compartilhamento do Windows.
+Para especificações detalhadas, regras de negócio e convenções técnicas para Inteligências Artificiais ou novos desenvolvedores, consulte o arquivo [REQUIREMENTS.md](file:///c:/Users/SU/Documents/findport/REQUIREMENTS.md).
