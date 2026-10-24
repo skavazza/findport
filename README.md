@@ -6,6 +6,10 @@ Uma ferramenta completa de auditoria, segurança e controle de portas de rede pa
 
 ## ⚡ Como Executar em 1 Clique
 
+No ServerPy HTTP Manager, o FindPort também está disponível em **Rede →
+FindPort**, com consulta e ações integradas à GUI. Consulte o
+[guia da integração](../docs/findport.md).
+
 Basta dar **duplo clique** no arquivo:
 ```cmd
 run.bat
@@ -53,4 +57,4 @@ Opções via linha de comando:
 
 ## 📖 Arquitetura e Especificação para IAs
 
-Para especificações detalhadas, regras de negócio e convenções técnicas para Inteligências Artificiais ou novos desenvolvedores, consulte o arquivo [REQUIREMENTS.md](file:///c:/Users/SU/Documents/findport/REQUIREMENTS.md).
+Para especificações detalhadas, regras de negócio e convenções técnicas para Inteligências Artificiais ou novos desenvolvedores, consulte o arquivo [REQUIREMENTS.md](REQUIREMENTS.md).

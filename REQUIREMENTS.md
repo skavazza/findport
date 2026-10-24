@@ -81,6 +81,20 @@ findport/
 ---
 
 ## 5. Diretrizes para Modificações Futuras por IAs
+
+### Integração com ServerPy HTTP Manager
+
+- `find_ports.ps1 -LibraryOnly` disponibiliza as funções sem abrir o menu.
+- `gui_bridge.ps1` fornece consultas e ações com resultado JSON. Consultas
+  usam coleta estrita para distinguir falhas de uma lista vazia.
+- O campo adicional `Inicio` contém os ticks UTC do início do processo,
+  quando disponíveis; a GUI exige essa identidade para encerrar processos.
+- A integração preserva endpoints com endereço/PID distintos na mesma porta.
+- Ações da GUI pedem confirmação, solicitam UAC quando necessário e registram
+  operações bem-sucedidas no mesmo arquivo de auditoria. Processos críticos
+  são bloqueados para encerramento pela GUI, sem opção de forçar.
+- Detalhes de uso e validação: [docs/findport.md](../docs/findport.md).
+
 1. **Não quebre o formato do console**: O console interativo deve caber em uma largura padrão de 100-120 colunas sem quebras de linha desalinhadas.
 2. **Preserve a consistência de tipos**: Campos retornados por funções de coleta devem manter nomes consistentes (`Porta`, `Proto`, `PID`, `Processo`, `Exposicao`, `PodeFechar`, `Firewall`, `ServicoConhecido`).
 3. **Validação prévia**: Sempre use o analisador sintático do PowerShell para garantir que o script não possui erros antes de concluir edições.

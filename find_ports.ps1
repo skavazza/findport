@@ -9,7 +9,8 @@
 
 [CmdletBinding()]
 param(
-    [switch]$ApenasSeguras
+    [switch]$ApenasSeguras,
+    [switch]$LibraryOnly
 )
 
 # Configuracao de codificacao para UTF-8 limpo no console
@@ -109,13 +110,14 @@ function Get-TipoExposicao {
 # =========================================================================
 
 function Obter-RegrasBloqueadas {
+    param([switch]$Strict)
     $regras = @()
     try {
-        $fwRules = Get-NetFirewallRule -Name "FindPort_Block_*" -ErrorAction SilentlyContinue
+        $fwRules = Get-NetFirewallRule -ErrorAction Stop | Where-Object { $_.Name -match '^FindPort_Block_(TCP|UDP)_[0-9]+$' }
         foreach ($r in $fwRules) {
-            $portFilter = $r | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue
+            $portFilter = $r | Get-NetFirewallPortFilter -ErrorAction Stop
             $portaNum = if ($portFilter.LocalPort) { $portFilter.LocalPort } else { "N/A" }
-            $proto = if ($portFilter.Protocol) { $portFilter.Protocol } else { "TCP" }
+            $proto = switch ([string]$portFilter.Protocol) { '6' { 'TCP' } '17' { 'UDP' } default { [string]$portFilter.Protocol } }
             $regras += [PSCustomObject]@{
                 RuleName    = $r.Name
                 DisplayName = $r.DisplayName
@@ -125,7 +127,7 @@ function Obter-RegrasBloqueadas {
                 Enabled     = $r.Enabled
             }
         }
-    } catch {}
+    } catch { if ($Strict) { throw } }
     return $regras
 }
 
@@ -136,33 +138,36 @@ function Obter-RegrasBloqueadas {
 function Obter-PortasAbertas {
     param(
         [bool]$FiltrarSeguras = $false,
-        [string]$TermoBusca = ""
+        [string]$TermoBusca = "",
+        [switch]$Strict
     )
 
     $regrasBloqueadas = Obter-RegrasBloqueadas
     $mapaBloqueadas = @{}
     foreach ($rb in $regrasBloqueadas) {
-        if ($rb.Porta -ne "N/A") {
+        if ($rb.Porta -ne "N/A" -and ([string]$rb.Enabled).ToLower() -in @('true', '1')) {
             $mapaBloqueadas["$($rb.Protocolo)_$($rb.Porta)"] = $true
         }
     }
 
     # 1. Coleta TCP Listen
     try {
-        $tcpConns = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue
+        $tcpConns = @(Get-NetTCPConnection -ErrorAction Stop | Where-Object { $_.State -eq 'Listen' })
     } catch {
+        if ($Strict) { throw }
         $tcpConns = @()
     }
 
     # 2. Coleta UDP
     try {
-        $udpConns = Get-NetUDPEndpoint -ErrorAction SilentlyContinue
+        $udpConns = @(Get-NetUDPEndpoint -ErrorAction Stop)
     } catch {
+        if ($Strict) { throw }
         $udpConns = @()
     }
 
     # Cache de processos para otimizar desempenho
-    $todosPids = ($tcpConns.OwningProcess + $udpConns.OwningProcess) | Select-Object -Unique
+    $todosPids = @(@($tcpConns | ForEach-Object { $_.OwningProcess }) + @($udpConns | ForEach-Object { $_.OwningProcess })) | Select-Object -Unique
     $tabelaProcessos = @{}
 
     foreach ($pidItem in $todosPids) {
@@ -176,9 +181,11 @@ function Obter-PortasAbertas {
         try {
             $proc = Get-Process -Id $pidItem -ErrorAction Stop
             $caminho = try { $proc.Path } catch { "Elevacao necessaria" }
+            $inicio = try { $proc.StartTime.ToUniversalTime().Ticks.ToString() } catch { "" }
             $tabelaProcessos[$pidItem] = [PSCustomObject]@{
                 ProcessName = $proc.ProcessName
                 Path        = if ($caminho) { $caminho } else { "N/A" }
+                Inicio      = $inicio
             }
         } catch {
             $tabelaProcessos[$pidItem] = [PSCustomObject]@{
@@ -247,6 +254,7 @@ function Obter-PortasAbertas {
             Servico     = $servico
             Motivo      = $motivo
             Caminho     = $procPath
+            Inicio      = $procInfo.Inicio
         })
     }
 
@@ -302,11 +310,12 @@ function Obter-PortasAbertas {
             Servico     = $servico
             Motivo      = $motivo
             Caminho     = $procPath
+            Inicio      = $procInfo.Inicio
         })
     }
 
-    # Remove duplicidades baseadas em Porta + Protocolo + PID
-    $itens = $lista | Sort-Object Porta, Proto -Unique
+    # Preserve diferentes enderecos e processos na mesma porta.
+    $itens = $lista | Sort-Object Porta, Proto, Endereco, PID -Unique
 
     if ($FiltrarSeguras) {
         $itens = $itens | Where-Object { $_.PodeFechar -like "SIM*" }
@@ -417,6 +426,7 @@ function Executar-Elevado {
 # =========================================================================
 # LOOP PRINCIPAL DA INTERFACE
 # =========================================================================
+if ($LibraryOnly) { return }
 $filtroSegurasAtivo = $ApenasSeguras
 $termoPesquisaAtivo = ""
 
