@@ -55,6 +55,14 @@ Opções via linha de comando:
 
 ---
 
+## 📱 Versão para Termux (Android)
+
+O FindPort também possui uma versão nativa em Bash para dispositivos Android via **Termux**:
+- Script: `findport.sh`
+- Documentação e instruções de instalação: [README_TERMUX.md](README_TERMUX.md)
+
+---
+
 ## 📖 Arquitetura e Especificação para IAs
 
 Para especificações detalhadas, regras de negócio e convenções técnicas para Inteligências Artificiais ou novos desenvolvedores, consulte o arquivo [REQUIREMENTS.md](REQUIREMENTS.md).
