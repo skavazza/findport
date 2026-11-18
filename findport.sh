@@ -7,10 +7,14 @@
 #  via iptables (Firewall do Linux/Android), mantendo log de auditoria.
 # =============================================================================
 
-# Definir diretório base do script e log de auditoria
+# Diretório base e arquivos de controle
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_FILE="${SCRIPT_DIR}/findport_audit.log"
 RULES_FILE="${SCRIPT_DIR}/.findport_rules"
+
+# Diretório temporário seguro para o Termux
+TMP_DIR="${TMPDIR:-${PREFIX:-/data/data/com.termux/files/usr}/tmp}"
+mkdir -p "$TMP_DIR" 2>/dev/null || TMP_DIR="${SCRIPT_DIR}"
 
 # Cores ANSI
 C_RESET="\033[0m"
@@ -31,6 +35,36 @@ PROCESSOS_CRITICOS=(
     "adbd" "logd" "lmkd" "keystore" "keystore2" "ueventd" "sh" "bash"
 )
 
+# Portas padrão para checagem ativa caso ss/netstat não estejam disponíveis
+PORTAS_COMUNS=(
+    21 22 53 80 443 1433 1521 2049 3000 3306 4200 5000
+    5037 5173 5353 5432 5555 5901 6000 6379 7070 8000 8022
+    8080 8081 8086 8888 9000 9090 9200 27017
+)
+
+# Detecta largura do terminal
+get_term_width() {
+    local w
+    w="$(tput cols 2>/dev/null || stty size 2>/dev/null | awk '{print $2}')"
+    if [ -z "$w" ] || [ "$w" -le 20 ] 2>/dev/null; then
+        w=60
+    fi
+    echo "$w"
+}
+
+# Imprime linha divisória adaptada à largura da tela
+print_divider() {
+    local char="${1:--}"
+    local color="${2:-$C_GRAY}"
+    local w
+    w="$(get_term_width)"
+    local line=""
+    for ((i=0; i<w; i++)); do
+        line="${line}${char}"
+    done
+    echo -e "${color}${line}${C_RESET}"
+}
+
 # Verifica se é root
 is_root() {
     [ "$(id -u)" -eq 0 ]
@@ -50,39 +84,39 @@ write_audit_log() {
     echo "[$timestamp] [$acao] Proto: $proto | Porta: $porta | PID: $pid | Processo: $processo | $detalhes" >> "$LOG_FILE" 2>/dev/null || true
 }
 
-# Dicionário de serviços conhecidos (com adições específicas do Android / Termux)
+# Dicionário de serviços conhecidos
 get_servico_conhecido() {
     local porta="$1"
     case "$porta" in
-        21)    echo "FTP (Transferencia de arquivos)" ;;
-        22)    echo "SSH (Acesso remoto padrao)" ;;
-        53)    echo "DNS (Resolucao de nomes)" ;;
+        21)    echo "FTP (Transferência)" ;;
+        22)    echo "SSH (Acesso remoto)" ;;
+        53)    echo "DNS (Resolução nomes)" ;;
         80)    echo "HTTP (Servidor Web)" ;;
-        443)   echo "HTTPS (Web Seguro / SSL)" ;;
-        1433)  echo "Microsoft SQL Server" ;;
+        443)   echo "HTTPS (Web Seguro/SSL)" ;;
+        1433)  echo "MS SQL Server" ;;
         1521)  echo "Oracle Database" ;;
-        2049)  echo "NFS (Network File System)" ;;
-        3000)  echo "Node.js / React / Grafana" ;;
+        2049)  echo "NFS (Network File)" ;;
+        3000)  echo "Node.js / React / Dev" ;;
         3306)  echo "MySQL / MariaDB" ;;
         4200)  echo "Angular Dev Server" ;;
         5000)  echo "Flask / Python / .NET" ;;
-        5037)  echo "ADB Host (Android Debug Bridge)" ;;
+        5037)  echo "ADB Host (Android Debug)" ;;
         5173)  echo "Vite Dev Server" ;;
         5353)  echo "mDNS / Avahi ZeroConf" ;;
         5432)  echo "PostgreSQL Database" ;;
-        5555)  echo "ADB Wireless (Android Debug)" ;;
+        5555)  echo "ADB Wireless (Android)" ;;
         5901)  echo "VNC Server (:1 Display)" ;;
         6000)  echo "X11 Server (Termux:X11)" ;;
         6379)  echo "Redis Cache" ;;
         7070)  echo "AnyDesk (Acesso Remoto)" ;;
-        8000)  echo "Django / Python HTTP Server" ;;
+        8000)  echo "Django / HTTP Server" ;;
         8022)  echo "Termux OpenSSH Server" ;;
-        8080)  echo "HTTP Alternativo / Tomcat / Dev" ;;
-        8081)  echo "Proxy / Metro Bundler (React Native)" ;;
+        8080)  echo "HTTP Dev / Tomcat / Web" ;;
+        8081)  echo "Proxy / Metro Bundler" ;;
         8086)  echo "InfluxDB / Dev Server" ;;
         8888)  echo "Jupyter Notebook" ;;
-        9000)  echo "PHP-FPM / Portainer / SonarQube" ;;
-        9090)  echo "Prometheus / Cockpit Web" ;;
+        9000)  echo "PHP-FPM / Portainer" ;;
+        9090)  echo "Prometheus / Cockpit" ;;
         9200)  echo "Elasticsearch" ;;
         27017) echo "MongoDB Database" ;;
         *)     echo "-" ;;
@@ -107,7 +141,6 @@ obter_regras_bloqueadas() {
     local regras=()
     if is_root && command -v iptables >/dev/null 2>&1; then
         while IFS= read -r line; do
-            # Formato esperado: -A INPUT -p tcp -m tcp --dport 8080 -m comment --comment FindPort_Block_TCP_8080 -j DROP
             if [[ "$line" =~ FindPort_Block_([A-Za-z]+)_([0-9]+) ]]; then
                 local proto="${BASH_REMATCH[1]}"
                 local porta="${BASH_REMATCH[2]}"
@@ -116,14 +149,13 @@ obter_regras_bloqueadas() {
         done < <(iptables -S INPUT 2>/dev/null | grep "FindPort_Block_")
     fi
 
-    # Fallback se tiver arquivo de regras persistido
+    # Fallback para arquivo persistido
     if [ ${#regras[@]} -eq 0 ] && [ -f "$RULES_FILE" ]; then
         while IFS= read -r line; do
             [ -n "$line" ] && regras+=("$line")
         done < "$RULES_FILE"
     fi
 
-    # Retorna regras únicas separadas por espaço
     printf "%s\n" "${regras[@]}" 2>/dev/null | sort -u
 }
 
@@ -152,7 +184,7 @@ bloquear_porta_firewall() {
 
     if ! is_root; then
         echo -e "\n${C_RED}ERRO: O bloqueio de portas no Firewall (iptables) exige privilégios de ROOT!${C_RESET}"
-        echo -e "${C_YELLOW}Dica: No Termux com Root, execute 'tsu' ou 'su' antes de rodar o findport.sh.${C_RESET}"
+        echo -e "${C_YELLOW}Dica: No Termux com Root, execute 'tsu' ou 'su' antes de rodar o findport.${C_RESET}"
         read -r -p "Pressione ENTER para voltar..."
         return 1
     fi
@@ -165,17 +197,13 @@ bloquear_porta_firewall() {
 
     local comment_tag="FindPort_Block_${proto}_${porta}"
 
-    # Remove regra anterior idêntica para evitar duplicação
     iptables -D INPUT -p "$proto_lower" --dport "$porta" -m comment --comment "$comment_tag" -j DROP 2>/dev/null || true
 
-    # Insere regra no topo do INPUT
     if iptables -I INPUT -p "$proto_lower" --dport "$porta" -m comment --comment "$comment_tag" -j DROP 2>/dev/null; then
-        # Tenta também no ip6tables se disponível
         if command -v ip6tables >/dev/null 2>&1; then
             ip6tables -I INPUT -p "$proto_lower" --dport "$porta" -m comment --comment "$comment_tag" -j DROP 2>/dev/null || true
         fi
 
-        # Salva em arquivo de controle
         grep -v "^${proto}:${porta}$" "$RULES_FILE" 2>/dev/null > "${RULES_FILE}.tmp" || true
         echo "${proto}:${porta}" >> "${RULES_FILE}.tmp"
         mv "${RULES_FILE}.tmp" "$RULES_FILE" 2>/dev/null || true
@@ -183,7 +211,7 @@ bloquear_porta_firewall() {
         write_audit_log "FIREWALL_BLOQUEADO" "$porta" "$proto" "$pid" "$processo" "Regra iptables criada: $comment_tag"
 
         echo -e "\n${C_GREEN}[OK] Porta $porta ($proto) bloqueada com sucesso no Firewall (iptables)!${C_RESET}"
-        echo -e "${C_CYAN}O aplicativo continua rodando no Android, mas conexões externas serão descartadas.${C_RESET}"
+        echo -e "${C_CYAN}O aplicativo continua rodando no Android, mas conexões de rede externas serão descartadas.${C_RESET}"
         sleep 2
         return 0
     else
@@ -209,19 +237,16 @@ desbloquear_porta_firewall() {
 
     local comment_tag="FindPort_Block_${proto}_${porta}"
 
-    # Remove regra do iptables
-    local removeu=0
     while iptables -D INPUT -p "$proto_lower" --dport "$porta" -m comment --comment "$comment_tag" -j DROP 2>/dev/null; do
-        removeu=1
+        :
     done
 
     if command -v ip6tables >/dev/null 2>&1; then
         while ip6tables -D INPUT -p "$proto_lower" --dport "$porta" -m comment --comment "$comment_tag" -j DROP 2>/dev/null; do
-            removeu=1
+            :
         done
     fi
 
-    # Atualiza arquivo de regras
     if [ -f "$RULES_FILE" ]; then
         grep -v "^${proto}:${porta}$" "$RULES_FILE" > "${RULES_FILE}.tmp" 2>/dev/null || true
         mv "${RULES_FILE}.tmp" "$RULES_FILE" 2>/dev/null || true
@@ -240,8 +265,7 @@ classificar_processo() {
     local nome="$2"
     local porta="$3"
 
-    # Checar se é processo crítico
-    if [ "$pid" -le 1 ]; then
+    if [ "$pid" -le 1 ] 2>/dev/null; then
         echo "NUNCA|Sistema Crítico|Processo vital do Kernel/Init"
         return
     fi
@@ -255,7 +279,7 @@ classificar_processo() {
 
     case "$nome" in
         *node*|*python*|*java*|*mariadb*|*mysqld*|*postgres*|*redis*|*httpd*|*nginx*|*php*|*sshd*)
-            echo "SIM|Dev / Servidor Local|Servidor ou ferramenta de desenvolvimento"
+            echo "SIM|Dev / Servidor Local|Servidor ou ferramenta de dev"
             ;;
         *termux*|*dropbear*)
             echo "CUIDADO|Ambiente Termux|Pode fechar sua sessão atual"
@@ -266,128 +290,252 @@ classificar_processo() {
     esac
 }
 
-# Coleta conexões abertas (TCP Listen e UDP)
-coletar_portas() {
-    # Limpa arquivos temporários
-    local tmp_raw
-    tmp_raw="$(mktemp 2>/dev/null || echo "/data/data/com.termux/files/usr/tmp/findport_$$.tmp")"
+# Coleta de processos locais do Termux para associação com portas
+obter_mapa_processos_termux() {
+    if command -v ps >/dev/null 2>&1; then
+        ps -ef 2>/dev/null || ps aux 2>/dev/null || ps 2>/dev/null
+    fi
+}
 
-    # Tenta usar 'ss'
-    if command -v ss >/dev/null 2>&1; then
-        # ss -tulpn
-        ss -H -t -u -l -n -p 2>/dev/null > "$tmp_raw" || true
+# Tenta descobrir o processo associado a uma porta inspecionando processos do Termux
+descobrir_processo_por_porta() {
+    local porta="$1"
+    local ps_texto="$2"
+
+    if [ -n "$ps_texto" ]; then
+        while IFS= read -r line; do
+            if [[ "$line" =~ (:[0-9]*${porta}[^0-9]|port[ =]*${porta}|-p[ =]*${porta}|${porta}) ]]; then
+                local pid
+                pid="$(echo "$line" | awk '{print $2}')"
+                local cmd
+                cmd="$(echo "$line" | awk '{print $8}')"
+                [ -z "$cmd" ] && cmd="$(echo "$line" | awk '{print $NF}')"
+                cmd="$(basename "$cmd" 2>/dev/null || echo "$cmd")"
+                if [ -n "$pid" ] && [[ "$pid" =~ ^[0-9]+$ ]]; then
+                    echo "${pid}|${cmd}"
+                    return
+                fi
+            fi
+        done <<< "$ps_texto"
+    fi
+    echo "0|Desconhecido"
+}
+
+# Sonda portas ativas usando Python (ultra-rápido e compatível com Android não-root)
+sonda_python() {
+    local py_bin=""
+    if command -v python >/dev/null 2>&1; then
+        py_bin="python"
+    elif command -v python3 >/dev/null 2>&1; then
+        py_bin="python3"
     fi
 
-    # Se 'ss' falhar ou retornar vazio, tenta 'netstat'
-    if [ ! -s "$tmp_raw" ] && command -v netstat >/dev/null 2>&1; then
-        netstat -tulnp 2>/dev/null | grep -E 'LISTEN|udp' > "$tmp_raw" || true
-    fi
+    [ -z "$py_bin" ] && return 1
 
-    # Se ainda vazio, tenta 'lsof'
-    if [ ! -s "$tmp_raw" ] && command -v lsof >/dev/null 2>&1; then
-        lsof -iTCP -sTCP:LISTEN -n -P 2>/dev/null | awk 'NR>1 {print "tcp LISTEN 0 0 "$9" * users:((\""$1"\",pid="$2",fd=0))"}' >> "$tmp_raw" || true
-        lsof -iUDP -n -P 2>/dev/null | awk 'NR>1 {print "udp UNCONN 0 0 "$9" * users:((\""$1"\",pid="$2",fd=0))"}' >> "$tmp_raw" || true
-    fi
+    $py_bin -c '
+import socket, sys, os, subprocess, re
 
-    # Se ainda vazio, lê diretamente de /proc/net/tcp e /proc/net/udp
-    if [ ! -s "$tmp_raw" ] && [ -r "/proc/net/tcp" ]; then
-        awk '
-        function hex2dec(h) {
-            return sprintf("%d", "0x" h);
-        }
-        function hex2ip(h) {
-            return sprintf("%d.%d.%d.%d", "0x" substr(h,7,2), "0x" substr(h,5,2), "0x" substr(h,3,2), "0x" substr(h,1,2));
-        }
-        NR > 1 {
-            split($2, local, ":");
-            ip = hex2ip(local[1]);
-            port = hex2dec(local[2]);
-            state = $4;
-            if (state == "0A") {
-                print "tcp LISTEN 0 0 " ip ":" port " 0.0.0.0:* pid=-"
-            }
-        }' /proc/net/tcp >> "$tmp_raw" 2>/dev/null || true
+ports_check = [
+    21, 22, 53, 80, 443, 1433, 1521, 2049, 3000, 3306, 4200, 5000,
+    5037, 5173, 5353, 5432, 5555, 5901, 6000, 6379, 7070, 8000, 8022,
+    8080, 8081, 8086, 8888, 9000, 9090, 9200, 27017
+]
 
-        awk '
-        function hex2dec(h) {
-            return sprintf("%d", "0x" h);
-        }
-        function hex2ip(h) {
-            return sprintf("%d.%d.%d.%d", "0x" substr(h,7,2), "0x" substr(h,5,2), "0x" substr(h,3,2), "0x" substr(h,1,2));
-        }
-        NR > 1 {
-            split($2, local, ":");
-            ip = hex2ip(local[1]);
-            port = hex2dec(local[2]);
-            print "udp UNCONN 0 0 " ip ":" port " 0.0.0.0:* pid=-"
-        }' /proc/net/udp >> "$tmp_raw" 2>/dev/null || true
-    fi
+ps_lines = []
+try:
+    ps_out = subprocess.check_output(["ps", "-ef"], stderr=subprocess.DEVNULL).decode("utf-8", errors="ignore")
+    ps_lines = ps_out.splitlines()
+    for m in re.finditer(r"(?:-p|--port|:|port\s*=\s*)(\d{2,5})", ps_out):
+        p = int(m.group(1))
+        if 1 <= p <= 65535 and p not in ports_check:
+            ports_check.append(p)
+except:
+    pass
 
-    # Processar as linhas capturadas
-    # Formato unificado no array: PORTA|PROTO|ENDERECO|PID|PROCESSO
-    local resultados=()
-
-    while IFS= read -r line; do
-        [ -z "$line" ] && continue
-
-        local proto="TCP"
-        if echo "$line" | grep -qi "udp"; then
-            proto="UDP"
-        fi
-
-        # Extrair endereço local e porta
-        # ss / netstat / lsof produzem padrões como 0.0.0.0:8080 ou 127.0.0.1:8022 ou [::]:8080 ou *:8080
-        local addr_col=""
-        for token in $line; do
-            if [[ "$token" =~ :[0-9]+$ ]]; then
-                addr_col="$token"
+for p in sorted(set(ports_check)):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(0.06)
+    res = s.connect_ex(("127.0.0.1", p))
+    s.close()
+    if res == 0:
+        pid = 0
+        pname = "Serviço TCP"
+        for line in ps_lines:
+            if str(p) in line:
+                parts = line.split()
+                if len(parts) >= 8:
+                    pid = parts[1]
+                    pname = os.path.basename(parts[7])
+                elif len(parts) >= 2:
+                    pid = parts[1]
+                    pname = os.path.basename(parts[-1])
                 break
+        print(f"{p}|TCP|127.0.0.1|{pid}|{pname}")
+' 2>/dev/null
+}
+
+# Sonda portas ativas usando recursos nativos do Bash (/dev/tcp)
+sonda_bash_devtcp() {
+    local ps_info="$1"
+    for p in "${PORTAS_COMUNS[@]}"; do
+        if (echo > /dev/tcp/127.0.0.1/"$p") 2>/dev/null; then
+            local p_info
+            p_info="$(descobrir_processo_por_porta "$p" "$ps_info")"
+            local pid="${p_info%%|*}"
+            local proc="${p_info##*|}"
+            [ "$proc" = "Desconhecido" ] && proc="Serviço TCP"
+            echo "${p}|TCP|127.0.0.1|${pid}|${proc}"
+        fi
+    done
+}
+
+# Coleta principal de conexões abertas
+coletar_portas() {
+    local resultados=()
+    local ps_snapshot
+    ps_snapshot="$(obter_mapa_processos_termux)"
+
+    local coletou_algo=0
+
+    # 1. Tentativa via 'ss' (sem a flag problemática -H)
+    if command -v ss >/dev/null 2>&1; then
+        local raw_ss
+        raw_ss="$(ss -tulnp 2>/dev/null || ss -tuln 2>/dev/null)"
+        if [ -n "$raw_ss" ]; then
+            while IFS= read -r line; do
+                [[ "$line" =~ ^(Netid|State|Proto) ]] && continue
+                [ -z "$line" ] && continue
+
+                local proto="TCP"
+                echo "$line" | grep -qi "udp" && proto="UDP"
+
+                local addr_col=""
+                for tok in $line; do
+                    if [[ "$tok" =~ :[0-9]+$ ]]; then
+                        addr_col="$tok"
+                        break
+                    fi
+                done
+                [ -z "$addr_col" ] && continue
+
+                local porta="${addr_col##*:}"
+                local endereco="${addr_col%:*}"
+                endereco="${endereco//\[/}"
+                endereco="${endereco//\]/}"
+                [ "$endereco" = "*" ] && endereco="0.0.0.0"
+
+                local pid="0"
+                local proc_name="Desconhecido"
+
+                if [[ "$line" =~ pid=([0-9]+) ]]; then
+                    pid="${BASH_REMATCH[1]}"
+                elif [[ "$line" =~ ([0-9]+)/([^ ]+) ]]; then
+                    pid="${BASH_REMATCH[1]}"
+                    proc_name="${BASH_REMATCH[2]}"
+                fi
+
+                if [[ "$line" =~ users:\(\(\"([^\"]+)\" ]]; then
+                    proc_name="${BASH_REMATCH[1]}"
+                fi
+
+                if [ "$pid" -eq 0 ] || [ "$proc_name" = "Desconhecido" ]; then
+                    local disc
+                    disc="$(descobrir_processo_por_porta "$porta" "$ps_snapshot")"
+                    [ "$pid" -eq 0 ] && pid="${disc%%|*}"
+                    [ "$proc_name" = "Desconhecido" ] && proc_name="${disc##*|}"
+                fi
+
+                resultados+=("${porta}|${proto}|${endereco}|${pid}|${proc_name}")
+                coletou_algo=1
+            done <<< "$raw_ss"
+        fi
+    fi
+
+    # 2. Tentativa via 'netstat' (se ss não encontrou nada)
+    if [ "$coletou_algo" -eq 0 ] && command -v netstat >/dev/null 2>&1; then
+        local raw_ns
+        raw_ns="$(netstat -tulnp 2>/dev/null || netstat -tlpn 2>/dev/null || netstat -an 2>/dev/null | grep -i listen)"
+        if [ -n "$raw_ns" ]; then
+            while IFS= read -r line; do
+                [[ "$line" =~ ^(Proto|Active) ]] && continue
+                [ -z "$line" ] && continue
+
+                local proto="TCP"
+                echo "$line" | grep -qi "udp" && proto="UDP"
+
+                local addr_col=""
+                for tok in $line; do
+                    if [[ "$tok" =~ :[0-9]+$ ]]; then
+                        addr_col="$tok"
+                        break
+                    fi
+                done
+                [ -z "$addr_col" ] && continue
+
+                local porta="${addr_col##*:}"
+                local endereco="${addr_col%:*}"
+                endereco="${endereco//\[/}"
+                endereco="${endereco//\]/}"
+                [ "$endereco" = "*" ] && endereco="0.0.0.0"
+
+                local pid="0"
+                local proc_name="Desconhecido"
+                if [[ "$line" =~ ([0-9]+)/([^ ]+) ]]; then
+                    pid="${BASH_REMATCH[1]}"
+                    proc_name="${BASH_REMATCH[2]}"
+                fi
+
+                if [ "$pid" -eq 0 ] || [ "$proc_name" = "Desconhecido" ]; then
+                    local disc
+                    disc="$(descobrir_processo_por_porta "$porta" "$ps_snapshot")"
+                    [ "$pid" -eq 0 ] && pid="${disc%%|*}"
+                    [ "$proc_name" = "Desconhecido" ] && proc_name="${disc##*|}"
+                fi
+
+                resultados+=("${porta}|${proto}|${endereco}|${pid}|${proc_name}")
+                coletou_algo=1
+            done <<< "$raw_ns"
+        fi
+    fi
+
+    # 3. Tentativa via /proc/net/tcp e /proc/net/udp
+    if [ "$coletou_algo" -eq 0 ] && [ -r "/proc/net/tcp" ]; then
+        while IFS= read -r p_line; do
+            [ -n "$p_line" ] && resultados+=("$p_line") && coletou_algo=1
+        done < <(awk '
+        function hex2dec(h) { return sprintf("%d", "0x" h); }
+        function hex2ip(h) {
+            return sprintf("%d.%d.%d.%d", "0x" substr(h,7,2), "0x" substr(h,5,2), "0x" substr(h,3,2), "0x" substr(h,1,2));
+        }
+        NR > 1 {
+            split($2, local, ":");
+            ip = hex2ip(local[1]);
+            port = hex2dec(local[2]);
+            if ($4 == "0A") {
+                print port "|TCP|" ip "|0|Kernel/App"
+            }
+        }' /proc/net/tcp 2>/dev/null)
+    fi
+
+    # 4. Complemento via Sonda Python (Detecta servidores ativos no aparelho mesmo sem root/iproute2)
+    while IFS= read -r py_line; do
+        if [ -n "$py_line" ]; then
+            resultados+=("$py_line")
+            coletou_algo=1
+        fi
+    done < <(sonda_python)
+
+    # 5. Complemento via Bash /dev/tcp para portas comuns
+    if [ "$coletou_algo" -eq 0 ]; then
+        while IFS= read -r dev_line; do
+            if [ -n "$dev_line" ]; then
+                resultados+=("$dev_line")
+                coletou_algo=1
             fi
-        done
+        done < <(sonda_bash_devtcp "$ps_snapshot")
+    fi
 
-        [ -z "$addr_col" ] && continue
-
-        local porta="${addr_col##*:}"
-        local endereco="${addr_col%:*}"
-        endereco="${endereco//\[/}"
-        endereco="${endereco//\]/}"
-        [ "$endereco" = "*" ] && endereco="0.0.0.0"
-
-        # Extrair PID e Nome do Processo
-        local pid="0"
-        local proc_name="Desconhecido"
-
-        if [[ "$line" =~ pid=([0-9]+) ]]; then
-            pid="${BASH_REMATCH[1]}"
-        elif [[ "$line" =~ ([0-9]+)/([^ ]+) ]]; then
-            pid="${BASH_REMATCH[1]}"
-            proc_name="${BASH_REMATCH[2]}"
-        fi
-
-        # Se temos o PID mas não o nome, busca em /proc/$pid/comm ou ps
-        if [ "$pid" -gt 0 ] && [ "$proc_name" = "Desconhecido" ]; then
-            if [ -r "/proc/$pid/comm" ]; then
-                proc_name="$(tr -d '\0\n' < "/proc/$pid/comm" 2>/dev/null || echo "PID:$pid")"
-            elif [ -r "/proc/$pid/cmdline" ]; then
-                proc_name="$(awk -F'\0' '{print $1}' "/proc/$pid/cmdline" 2>/dev/null || echo "PID:$pid")"
-                proc_name="$(basename "$proc_name" 2>/dev/null || echo "$proc_name")"
-            fi
-        fi
-
-        # Extração de users:(("name",pid=123,fd=3))
-        if [[ "$line" =~ users:\(\(\"([^\"]+)\" ]]; then
-            proc_name="${BASH_REMATCH[1]}"
-        fi
-
-        # Normaliza proc_name
-        [ -z "$proc_name" ] && proc_name="N/A"
-
-        resultados+=("${porta}|${proto}|${endereco}|${pid}|${proc_name}")
-    done < "$tmp_raw"
-
-    rm -f "$tmp_raw" 2>/dev/null || true
-
-    # Ordena e remove duplicados
+    # Retorna resultados únicos ordenados por porta
     printf "%s\n" "${resultados[@]}" 2>/dev/null | sort -t'|' -k1,1n -k2,2 -u
 }
 
@@ -402,27 +550,31 @@ while true; do
     clear
 
     IS_ROOT=0
-    if is_root; then
-        IS_ROOT=1
-    fi
+    is_root && IS_ROOT=1
 
-    # Atualiza cache de regras bloqueadas
+    TERM_WIDTH="$(get_term_width)"
+    IS_MOBILE=0
+    [ "$TERM_WIDTH" -lt 85 ] && IS_MOBILE=1
+
     mapfile -t REGRAS_BLOQUEADAS_CACHE < <(obter_regras_bloqueadas)
 
-    echo -e "${C_CYAN}===================================================================================================${C_RESET}"
-    echo -e "${C_CYAN}                    FINDPORT - AUDITORIA DE REDE, PORTAS & FIREWALL (TERMUX)                       ${C_RESET}"
-    echo -e "${C_CYAN}===================================================================================================${C_RESET}"
+    print_divider "=" "$C_CYAN"
+    echo -e "${C_CYAN}${C_BOLD}   🛡️  FINDPORT - AUDITORIA DE REDE & FIREWALL (TERMUX)${C_RESET}"
+    print_divider "=" "$C_CYAN"
 
     if [ "$IS_ROOT" -eq 1 ]; then
-        echo -e "  ${C_BOLD}STATUS:${C_RESET} ${C_GREEN}ROOT ATIVO [Permissão Total: Visualização Completa, Kill & Firewall iptables]${C_RESET}"
+        echo -e "  ${C_BOLD}STATUS:${C_RESET} ${C_GREEN}ROOT ATIVO [Acesso Total: Kill & Firewall iptables]${C_RESET}"
     else
-        echo -e "  ${C_BOLD}STATUS:${C_RESET} ${C_YELLOW}USUÁRIO COMUM (Termux) [Visualiza processos do Termux. Para iptables/root use 'tsu']${C_RESET}"
+        echo -e "  ${C_BOLD}STATUS:${C_RESET} ${C_YELLOW}USUÁRIO COMUM (Termux)${C_RESET}"
+        if ! command -v ss >/dev/null 2>&1; then
+            echo -e "  ${C_GRAY}Dica: Instale ferramentas completas com a opção [I] abaixo.${C_RESET}"
+        fi
     fi
-    echo -e "${C_GRAY}---------------------------------------------------------------------------------------------------${C_RESET}"
+    print_divider "-" "$C_GRAY"
 
     # Painel de portas bloqueadas no Firewall
     if [ ${#REGRAS_BLOQUEADAS_CACHE[@]} -gt 0 ]; then
-        echo -e "  ${C_MAGENTA}🛡️  PORTAS ATUALMENTE BLOQUEADAS NO FIREWALL (IPTABLES):${C_RESET}"
+        echo -e "  ${C_MAGENTA}🛡️  PORTAS BLOQUEADAS NO FIREWALL (IPTABLES):${C_RESET}"
         b_idx=1
         for rb in "${REGRAS_BLOQUEADAS_CACHE[@]}"; do
             [ -z "$rb" ] && continue
@@ -431,20 +583,19 @@ while true; do
             echo -e "     ${C_YELLOW}[B${b_idx}] Porta ${porta_b} (${proto_b}) - Bloqueada no iptables${C_RESET}"
             ((b_idx++))
         done
-        echo -e "     ${C_GRAY}(Pressione 'D' no menu para desbloquear qualquer uma delas)${C_RESET}"
-        echo -e "${C_GRAY}---------------------------------------------------------------------------------------------------${C_RESET}"
+        echo -e "     ${C_GRAY}(Pressione 'D' no menu para desbloquear)${C_RESET}"
+        print_divider "-" "$C_GRAY"
     fi
 
     echo -e "${C_GRAY}Coletando conexões de rede ativas (TCP Listen & UDP)...${C_RESET}"
     mapfile -t LISTA_RAW < <(coletar_portas)
 
-    # Filtragem e montagem dos itens
+    # Filtragem dos itens
     ITENS_FILTRADOS=()
     for row in "${LISTA_RAW[@]}"; do
         [ -z "$row" ] && continue
         IFS='|' read -r r_porta r_proto r_addr r_pid r_proc <<< "$row"
 
-        # Obter detalhes
         r_exposicao="$(get_tipo_exposicao "$r_addr")"
         r_servico="$(get_servico_conhecido "$r_porta")"
 
@@ -457,10 +608,8 @@ while true; do
         fi
 
         # Filtro de seguras
-        if [ "$filtro_seguras" -eq 1 ]; then
-            if [[ "$r_podefechar" != SIM* ]]; then
-                continue
-            fi
+        if [ "$filtro_seguras" -eq 1 ] && [[ "$r_podefechar" != SIM* ]]; then
+            continue
         fi
 
         # Filtro de busca
@@ -483,44 +632,78 @@ while true; do
 
     echo -e "${C_WHITE}Filtro: ${txt_filtro}${txt_busca} | Total encontrado: ${#ITENS_FILTRADOS[@]}${C_RESET}\n"
 
-    # Cabeçalho da tabela
-    printf "${C_CYAN}%-5s | %-6s | %-5s | %-7s | %-18s | %-15s | %-12s | %-10s | %-16s${C_RESET}\n" \
-        "#" "PORTA" "PROTO" "PID" "PROCESSO" "EXPOSIÇÃO" "FECHAR?" "FIREWALL" "SERVIÇO / NOTA"
-    echo -e "${C_GRAY}---------------------------------------------------------------------------------------------------${C_RESET}"
-
     contador=1
     declare -A MAPA_ITENS
 
-    for item in "${ITENS_FILTRADOS[@]}"; do
-        MAPA_ITENS[$contador]="$item"
-        IFS='|' read -r p_porta p_proto p_addr p_pid p_proc p_expo p_fechar p_fw p_serv p_cat p_mot <<< "$item"
+    if [ ${#ITENS_FILTRADOS[@]} -eq 0 ]; then
+        echo -e "${C_YELLOW}  ⚠️  Nenhuma porta em escuta detectada no momento.${C_RESET}"
+        echo -e "${C_GRAY}  • Se você acabou de iniciar um servidor (Python, Node, etc.), tecle [R] para recarregar.${C_RESET}"
+        echo -e "${C_GRAY}  • Para auditar todos os processos do Android, instale o pacote [I] ou use Root [A].${C_RESET}\n"
+    else
+        # RENDERIZAÇÃO DA LISTA
+        if [ "$IS_MOBILE" -eq 1 ]; then
+            # MODO MOBILE: Formato de Cards compactos adaptados à tela do celular
+            for item in "${ITENS_FILTRADOS[@]}"; do
+                MAPA_ITENS[$contador]="$item"
+                IFS='|' read -r p_porta p_proto p_addr p_pid p_proc p_expo p_fechar p_fw p_serv p_cat p_mot <<< "$item"
 
-        # Cor da linha
-        cor_linha="$C_WHITE"
-        if [ "$p_fechar" = "NUNCA" ]; then
-            cor_linha="$C_GRAY"
-        elif [ "$p_fw" = "BLOQUEADA" ]; then
-            cor_linha="$C_MAGENTA"
-        elif [[ "$p_expo" == *"Exposta"* ]]; then
-            cor_linha="$C_YELLOW"
-        elif [[ "$p_fechar" == SIM* ]]; then
-            cor_linha="$C_GREEN"
+                # Badges de status
+                cor_status="$C_GREEN"
+                [ "$p_fechar" = "NUNCA" ] && cor_status="$C_RED"
+                [ "$p_fechar" = "CUIDADO" ] && cor_status="$C_YELLOW"
+
+                cor_fw="$C_GRAY"
+                [ "$p_fw" = "BLOQUEADA" ] && cor_fw="$C_MAGENTA"
+
+                cor_expo="$C_GREEN"
+                [[ "$p_expo" == *"Exposta"* ]] && cor_expo="$C_YELLOW"
+
+                echo -e "${C_CYAN}[${contador}]${C_RESET} ${C_BOLD}${p_porta}/${p_proto}${C_RESET}  ${cor_status}[${p_fechar}]${C_RESET}  ${cor_fw}FW:${p_fw}${C_RESET}"
+                echo -e "    ${cor_expo}● ${p_expo}${C_RESET} (${p_addr})"
+                echo -e "    ${C_WHITE}App:${C_RESET} ${p_proc} (PID: ${p_pid})"
+                [ "$p_serv" != "-" ] && echo -e "    ${C_GRAY}Nota:${C_RESET} ${p_serv}"
+                print_divider "." "$C_GRAY"
+
+                ((contador++))
+            done
+        else
+            # MODO DESKTOP / WIDE: Tabela completa alinhada
+            printf "${C_CYAN}%-5s | %-6s | %-5s | %-7s | %-16s | %-14s | %-10s | %-9s | %-16s${C_RESET}\n" \
+                "#" "PORTA" "PROTO" "PID" "PROCESSO" "EXPOSIÇÃO" "FECHAR?" "FIREWALL" "SERVIÇO / NOTA"
+            print_divider "-" "$C_GRAY"
+
+            for item in "${ITENS_FILTRADOS[@]}"; do
+                MAPA_ITENS[$contador]="$item"
+                IFS='|' read -r p_porta p_proto p_addr p_pid p_proc p_expo p_fechar p_fw p_serv p_cat p_mot <<< "$item"
+
+                cor_linha="$C_WHITE"
+                if [ "$p_fechar" = "NUNCA" ]; then
+                    cor_linha="$C_GRAY"
+                elif [ "$p_fw" = "BLOQUEADA" ]; then
+                    cor_linha="$C_MAGENTA"
+                elif [[ "$p_expo" == *"Exposta"* ]]; then
+                    cor_linha="$C_YELLOW"
+                elif [[ "$p_fechar" == SIM* ]]; then
+                    cor_linha="$C_GREEN"
+                fi
+
+                proc_trunc="${p_proc:0:16}"
+                serv_trunc="${p_serv:0:16}"
+                expo_trunc="${p_expo:0:14}"
+
+                printf "${cor_linha}[%-3d] | %-6s | %-5s | %-7s | %-16s | %-14s | %-10s | %-9s | %-16s${C_RESET}\n" \
+                    "$contador" "$p_porta" "$p_proto" "$p_pid" "$proc_trunc" "$expo_trunc" "$p_fechar" "$p_fw" "$serv_trunc"
+
+                ((contador++))
+            done
         fi
+    fi
 
-        # Truncamentos para manter alinhamento
-        proc_trunc="${p_proc:0:18}"
-        serv_trunc="${p_serv:0:16}"
-        expo_trunc="${p_expo:0:15}"
-
-        printf "${cor_linha}[%-3d] | %-6s | %-5s | %-7s | %-18s | %-15s | %-12s | %-10s | %-16s${C_RESET}\n" \
-            "$contador" "$p_porta" "$p_proto" "$p_pid" "$proc_trunc" "$expo_trunc" "$p_fechar" "$p_fw" "$serv_trunc"
-
-        ((contador++))
-    done
-
-    echo -e "${C_GRAY}---------------------------------------------------------------------------------------------------${C_RESET}"
-    echo -e "${C_CYAN}MENU DE OPÇÕES:${C_RESET}"
-    echo -e "  ${C_WHITE}[1-$((contador-1))] Selecionar número para gerenciar (Encerrar Processo ou Bloquear no Firewall)${C_RESET}"
+    print_divider "-" "$C_GRAY"
+    echo -e "${C_CYAN}${C_BOLD}MENU DE OPÇÕES:${C_RESET}"
+    if [ ${#ITENS_FILTRADOS[@]} -gt 0 ]; then
+        echo -e "  ${C_WHITE}[1-$((contador-1))] Selecionar número para gerenciar (Kill ou Firewall)${C_RESET}"
+    fi
     echo -e "  ${C_YELLOW}[B]     Buscar / Filtrar por texto (Porta, Processo ou Serviço)${C_RESET}"
     if [ -n "$termo_busca" ]; then
         echo -e "  ${C_YELLOW}[C]     Limpar busca ativa${C_RESET}"
@@ -529,11 +712,14 @@ while true; do
         echo -e "  ${C_MAGENTA}[D]     Desbloquear porta(s) no Firewall (iptables)${C_RESET}"
     fi
     if [ "$filtro_seguras" -eq 1 ]; then
-        echo -e "  ${C_WHITE}[F]     Alternar filtro de seguras: [DESATIVAR]${C_RESET}"
+        echo -e "  ${C_WHITE}[F]     Filtro seguras: [DESATIVAR]${C_RESET}"
     else
-        echo -e "  ${C_WHITE}[F]     Alternar filtro de seguras: [ATIVAR]${C_RESET}"
+        echo -e "  ${C_WHITE}[F]     Filtro seguras: [ATIVAR]${C_RESET}"
     fi
     echo -e "  ${C_WHITE}[R]     Recarregar lista${C_RESET}"
+    if ! command -v ss >/dev/null 2>&1; then
+        echo -e "  ${C_GREEN}[I]     Instalar iproute2/procps (Melhora detecção)${C_RESET}"
+    fi
     if [ "$IS_ROOT" -eq 0 ]; then
         echo -e "  ${C_CYAN}[A]     Tentar elevar para ROOT (tsu / su)${C_RESET}"
     fi
@@ -550,6 +736,14 @@ while true; do
         [rR])
             continue
             ;;
+        [iI])
+            clear
+            echo -e "${C_GREEN}Instalando pacotes recomendados no Termux (iproute2 procps)...${C_RESET}"
+            pkg install -y iproute2 procps 2>/dev/null || apt-get install -y iproute2 procps 2>/dev/null
+            echo -e "\n${C_GREEN}Instalação finalizada! Pressione ENTER para recarregar...${C_RESET}"
+            read -r
+            continue
+            ;;
         [fF])
             if [ "$filtro_seguras" -eq 1 ]; then
                 filtro_seguras=0
@@ -560,7 +754,7 @@ while true; do
             ;;
         [bB])
             echo ""
-            read -r -p "Digite o termo para filtrar (ex: node, 8080, ssh, etc.): " termo_input
+            read -r -p "Digite o termo para filtrar (ex: 8080, node, python): " termo_input
             termo_busca="$termo_input"
             continue
             ;;
@@ -577,18 +771,18 @@ while true; do
                     echo -e "${C_CYAN}Reiniciando via 'su'...${C_RESET}"
                     exec su -c "bash \"${BASH_SOURCE[0]}\""
                 else
-                    echo -e "${C_RED}Comando 'tsu' ou 'su' não encontrado. Seu dispositivo precisa de acesso Root para essa opção.${C_RESET}"
+                    echo -e "${C_RED}Comandos 'tsu' ou 'su' não encontrados no Termux.${C_RESET}"
+                    echo -e "${C_YELLOW}Dica: Instale o tsu com 'pkg install tsu' se seu aparelho tiver Root.${C_RESET}"
                     read -r -p "Pressione ENTER para continuar..."
                 fi
             fi
             continue
             ;;
         [dD])
-            # Menu de Desbloqueio
             clear
-            echo -e "${C_MAGENTA}===================================================================================================${C_RESET}"
-            echo -e "${C_MAGENTA}                         DESBLOQUEIO DE PORTAS NO FIREWALL (IPTABLES)                              ${C_RESET}"
-            echo -e "${C_MAGENTA}===================================================================================================${C_RESET}"
+            print_divider "=" "$C_MAGENTA"
+            echo -e "${C_MAGENTA}${C_BOLD}           DESBLOQUEIO DE PORTAS NO FIREWALL (IPTABLES)${C_RESET}"
+            print_divider "=" "$C_MAGENTA"
 
             if [ ${#REGRAS_BLOQUEADAS_CACHE[@]} -eq 0 ]; then
                 echo -e "${C_YELLOW}Nenhuma regra de bloqueio encontrada.${C_RESET}"
@@ -608,7 +802,7 @@ while true; do
             echo -e "  ${C_YELLOW}[T] Desbloquear TODAS as portas bloqueadas${C_RESET}"
             echo -e "  ${C_GRAY}[0] Voltar ao menu principal${C_RESET}\n"
 
-            read -r -p "Escolha o número da porta para desbloquear: " desb_escolha
+            read -r -p "Escolha o número da regra para desbloquear: " desb_escolha
             desb_escolha="$(echo "$desb_escolha" | tr -d '[:space:]')"
 
             if [ "$desb_escolha" = "0" ] || [ -z "$desb_escolha" ]; then
@@ -628,45 +822,43 @@ while true; do
             continue
             ;;
         *)
-            # Checar se selecionou um número da lista
             if [[ "$escolha" =~ ^[0-9]+$ ]] && [ -n "${MAPA_ITENS[$escolha]}" ]; then
                 selecionado="${MAPA_ITENS[$escolha]}"
                 IFS='|' read -r s_porta s_proto s_addr s_pid s_proc s_expo s_fechar s_fw s_serv s_cat s_mot <<< "$selecionado"
 
                 clear
-                echo -e "${C_CYAN}===================================================================================================${C_RESET}"
-                echo -e "${C_CYAN}                  GERENCIAR PORTA ${s_porta} (${s_proto}) - TERMUX / ANDROID                       ${C_RESET}"
-                echo -e "${C_CYAN}===================================================================================================${C_RESET}"
+                print_divider "=" "$C_CYAN"
+                echo -e "${C_CYAN}${C_BOLD}          GERENCIAR PORTA ${s_porta} (${s_proto}) - TERMUX / ANDROID${C_RESET}"
+                print_divider "=" "$C_CYAN"
                 echo -e "  Porta:           ${C_WHITE}${s_porta} (${s_proto})${C_RESET}"
                 if [[ "$s_expo" == *"Exposta"* ]]; then
-                    echo -e "  Endereço IP:     ${s_addr} -> Exposição: ${C_YELLOW}${s_expo}${C_RESET}"
+                    echo -e "  Endereço IP:     ${s_addr} -> ${C_YELLOW}${s_expo}${C_RESET}"
                 else
-                    echo -e "  Endereço IP:     ${s_addr} -> Exposição: ${C_GREEN}${s_expo}${C_RESET}"
+                    echo -e "  Endereço IP:     ${s_addr} -> ${C_GREEN}${s_expo}${C_RESET}"
                 fi
                 echo -e "  Serviço Notável: ${C_WHITE}${s_serv}${C_RESET}"
                 echo -e "  Processo:        ${C_WHITE}${s_proc} (PID: ${s_pid})${C_RESET}"
                 echo -e "  Categoria:       ${C_WHITE}${s_cat}${C_RESET}"
                 echo -e "  Pode Fechar?:    ${C_YELLOW}${s_fechar} - ${s_mot}${C_RESET}"
                 echo -e "  Status Firewall: ${C_WHITE}${s_fw}${C_RESET}"
-                echo -e "${C_GRAY}---------------------------------------------------------------------------------------------------${C_RESET}"
+                print_divider "-" "$C_GRAY"
                 echo -e "${C_CYAN}O QUE VOCÊ DESEJA FAZER?${C_RESET}\n"
-                echo -e "  ${C_RED}[1] Encerrar o processo (kill -9) - Finaliza o aplicativo e libera a porta${C_RESET}"
-                echo -e "  ${C_YELLOW}[2] Bloquear a porta no Firewall (iptables) - SEM fechar o aplicativo (Requer Root)${C_RESET}"
+                echo -e "  ${C_RED}[1] Encerrar o processo (kill -9) - Libera a porta imediatamente${C_RESET}"
+                echo -e "  ${C_YELLOW}[2] Bloquear a porta no Firewall (iptables) - SEM fechar app (Requer Root)${C_RESET}"
                 echo -e "  ${C_GRAY}[0] Voltar ao menu principal${C_RESET}\n"
 
-                read -r -p "Selecione a ação desejada (1, 2 ou 0): " acao
+                read -r -p "Selecione a ação (1, 2 ou 0): " acao
                 acao="$(echo "$acao" | tr -d '[:space:]')"
 
                 if [ "$acao" = "1" ]; then
-                    if [ "$s_pid" -le 0 ]; then
-                        echo -e "\n${C_RED}ERRO: PID não identificado para esta porta (ou pertence a outro usuário/sistema restrito pelo Android).${C_RESET}"
+                    if [ "$s_pid" -le 0 ] 2>/dev/null; then
+                        echo -e "\n${C_RED}ERRO: PID não identificado para esta porta (processo protegido pelo Android).${C_RESET}"
                         read -r -p "Pressione ENTER para voltar..."
                         continue
                     fi
 
                     if [ "$s_fechar" = "NUNCA" ]; then
                         echo -e "\n${C_RED}⚠️ BLOQUEIO DE SEGURANÇA: O processo '${s_proc}' (PID ${s_pid}) é vital para o Android!${C_RESET}"
-                        echo -e "${C_RED}Finalizá-lo causará reinicialização súbita ou travamento do sistema Android.${C_RESET}"
                         read -r -p "Tem certeza absoluta? Digite 'SIM' em maiúsculo para forçar: " conf_forcar
                         if [ "$conf_forcar" != "SIM" ]; then
                             echo -e "${C_GREEN}Operação cancelada por segurança.${C_RESET}"
@@ -682,23 +874,20 @@ while true; do
                         fi
                     fi
 
-                    # Executa encerramento
                     if kill -9 "$s_pid" 2>/dev/null; then
                         write_audit_log "PROCESSO_ENCERRADO" "$s_porta" "$s_proto" "$s_pid" "$s_proc" "Encerrado com kill -9 pelo usuario"
                         echo -e "\n${C_GREEN}[OK] Processo '${s_proc}' (PID ${s_pid}) encerrado! Porta ${s_porta} liberada.${C_RESET}"
                         sleep 2
                     else
                         echo -e "\n${C_RED}Falha ao encerrar o processo ${s_pid}.${C_RESET}"
-                        echo -e "${C_YELLOW}Dica: Processos de outros apps no Android exigem permissão Root para serem finalizados.${C_RESET}"
+                        echo -e "${C_YELLOW}Dica: Processos do Android ou de outros apps requerem Root para serem encerrados.${C_RESET}"
                         read -r -p "Pressione ENTER para continuar..."
                     fi
                 elif [ "$acao" = "2" ]; then
                     bloquear_porta_firewall "$s_porta" "$s_proto" "$s_pid" "$s_proc"
-                else
-                    echo -e "${C_GRAY}Voltando ao menu...${C_RESET}"
                 fi
             else
-                echo -e "${C_RED}Opção inválida. Digite o número da porta ou uma letra do menu.${C_RESET}"
+                echo -e "${C_RED}Opção inválida.${C_RESET}"
                 sleep 1
             fi
             ;;
